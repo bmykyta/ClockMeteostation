@@ -60,5 +60,5 @@ byte cloud_part2[] = { // second part of cloud for lcd
 };
 ```
 
-![Concept scheme](schemes\Meteostation_схема.jpg "Concept scheme")
-![Visual scheme](schemes\Meteostation_bb.jpg "Visual scheme")
+![Concept scheme](/schemes/Meteostation_схема.jpg "Concept scheme")
+![Visual scheme](/schemes/Meteostation_bb.jpg "Visual scheme")
