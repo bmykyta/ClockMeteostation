@@ -1,7 +1,7 @@
 # Meteo station
 ## This project is done on a nodemcu esp8266 board
 
-Here you can find visual and concept diagrams for the project
+Here you can find visual and concept diagrams for the project. Nano is only used for 5V power.
 
 #### What electronic devices do you need?
 
@@ -59,3 +59,6 @@ byte cloud_part2[] = { // second part of cloud for lcd
   B11110
 };
 ```
+
+![Concept scheme](schemes\Meteostation_схема.jpg "Concept scheme")
+![Visual scheme](schemes\Meteostation_bb.jpg "Visual scheme")

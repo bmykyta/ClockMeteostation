@@ -20,9 +20,9 @@ const char* time_api = "worldtimeapi.org"; // world time api for current time
 const char* weather_api = "api.openweathermap.org/data/2.5"; // open weather map for current weather and forecasts
 const String owm_token = "APPID=955b3280174bbe6155b80a34ad117a0d"; // token for communication with open weather map api
 String location = "Kharkiv,UA"; // location for the forecast
-const char* mqtt_server = "192.168.1.3";
-const int mqtt_port = 1883;
-const char* mqtt_user = "";
+const char* mqtt_server = "192.168.1.3"; // mqtt server addr
+const int mqtt_port = 1883; // mqtt port
+const char* mqtt_user = ""; // if mqtt anonymous with user and pass
 const char* mqtt_pass = "";
 
 const int rLEDPin = D5;
