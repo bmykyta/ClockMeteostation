@@ -10,9 +10,10 @@
 #include <LiquidCrystal_I2C.h>
 #include <ArduinoJson.h>
 #include <Wire.h>
-#include <SPI.h>
 #include "configs.h"
 #include "ScrollLcdText.h"
+#include "functions.h"
+#include "JsonBufferParser.h"
 
 const char* ssid = STASSID; // SSID for wi-fi station
 const char* password = STAPSK; // password for wi-fi station
@@ -20,12 +21,13 @@ const char* time_api = "worldtimeapi.org"; // world time api for current time
 const char* weather_api = "api.openweathermap.org/data/2.5"; // open weather map for current weather and forecasts
 const String owm_token = "APPID=955b3280174bbe6155b80a34ad117a0d"; // token for communication with open weather map api
 String location = "Kharkiv,UA"; // location for the forecast
-const char* mqtt_server = "192.168.1.3"; // mqtt server addr
+const char* mqtt_server = "192.168.1.6"; // mqtt server addr
 const int mqtt_port = 1883; // mqtt port
 const char* mqtt_user = ""; // if mqtt anonymous with user and pass
 const char* mqtt_pass = "";
 
 const int rLEDPin = D5;
+const int button = D4;
 
 bool butt_flag = false;
 bool butt;
@@ -37,11 +39,13 @@ WiFiClientSecure net_ssl; // later we confirm ssl certificates
 UniversalTelegramBot bot(BOTtoken, net_ssl);
 
 WiFiClient wifiMqttClient;
-PubSubClient mqttClient(wifiMqttClient);
+PubSubClient mqttClient(mqtt_server, mqtt_port, callbackOnMessage, wifiMqttClient);
 
 LiquidCrystal_I2C lcd(LCDADDR, 20, 4);
 DHT dht(DHTPIN, DHT11);
 Scroll_Lcd_Text scrollLcdText;
+JsonBufferParser jsonParser;
+void getWeather();
 
 String buffer_line_time; // buffer for recieve response from time api
 String buffer_line_weather; // buffer for recieve response from weather api
@@ -54,20 +58,12 @@ bool Start = false; // if new user starting bot
 int ledStatus = 0; // led status
 float humidity; // humidity - влажность воздуха получаемая на текущем модуле DHT-11
 float temperature; // temperature - температура получаемая на текущем модуле DHT-11
+int current_mode = 0;
 
-//handle arrived messages from mqtt brocker
-void on_message(char* topic, byte* payload, unsigned int length) {
-  Serial.print("Message arrived [");
-  Serial.print(topic);
-  Serial.print("] ");
-  for (int i = 0; i < length; i++) {
-    Serial.print((char)payload[i]);
-  }
-  Serial.println();
-  if (String(topic) == "room/led") {
-    int ledState = String((char*)payload).toInt();
-    digitalWrite(rLEDPin, ledState);
-  }
+void lcdPrint(String str, int col = 0, int row = 0)
+{
+  lcd.setCursor(col, row);
+  lcd.print(str);
 }
 
 void reconnect() {
@@ -77,7 +73,8 @@ void reconnect() {
     String clientId = "ESP8266Client-1";
     // Attempt to connect
     if (mqttClient.connect(clientId.c_str())) {
-      Serial.println("connected");
+      Serial.print("connected  state =");
+      Serial.println(mqttClient.state());
       mqttClient.subscribe("room/+");
     } else {
       Serial.print("failed, rc=");
@@ -89,10 +86,82 @@ void reconnect() {
   }
 }
 
-void lcdPrint(String str, int col = 0, int row = 0) 
-{
-  lcd.setCursor(col, row);
-  lcd.print(str);
+void switch_led_command(String chat_id, String text) {
+  if (text == "On") {
+    digitalWrite(rLEDPin, HIGH); // turn the LED ON (HIGH is the voltage level)
+    bot.sendMessage(chat_id, "LED is ON", ""); // sending response to bot
+    ledStatus = 1;
+  }
+
+  if (text == "Off") {
+    ledStatus = 0;
+    digitalWrite(rLEDPin, LOW);    // turn the LED off (LOW is the voltage level)
+    bot.sendMessage(chat_id, "Led is OFF", "");  // sending response to bot
+  }
+}
+
+void check_led_status_command(String chat_id, String text) {
+  if (text == "/status") {
+    if (ledStatus) {
+      bot.sendMessage(chat_id, "Led is ON 💡", ""); // \xF0\x9F\x92\xA1
+    } else {
+      bot.sendMessage(chat_id, "Led is OFF 💡", "");
+    }
+  }
+}
+
+void get_meteodata_command(String chat_id, String text) {
+  if (text == "/getmeteodata") {
+    String meteostation_data = "Сейчас в комнате " + String(temperature) + " °С . \n";
+    meteostation_data += "💧 Влажность: " + String(humidity) + " %.\n"; // droplet :droplet: or U+1F4A7 or \xF0\x9F\x92\xA7
+    bot.sendMessage(chat_id, meteostation_data, "Markdown");
+  }
+}
+
+void printWeatherLcd(JsonBufferParser::WeatherData weather) {
+  lcdPrint("City:" + weather.city + " " + weather.weather_param_en);
+  lcdPrint("T:" + String(weather.temp) + "\337C F:" + String(weather.feels_like) + "\337C", 0, 1);
+  lcdPrint("Wind:" + String(weather.wind_speed) + "m/s \1" + String(weather.humidity) + "%", 0, 2);
+  lcdPrint("\2\3" + String(weather.clouds_all) + " %", 0, 3);
+}
+
+void get_weather_command(String chat_id, String text) {
+  if (text == "/getweather") { // get weather in our location from weather api
+    getWeather();
+    auto weather = jsonParser.getWeatherData(buffer_line_weather);
+    if (weather.empty != true) {
+      String meteostation_data = "Погода в *" + weather.city + "*.\n";
+      meteostation_data += "🌡 Температура:" + String(weather.temp) + " °С, ощущается как " + String(weather.feels_like) + " °С. ";
+      meteostation_data += weather.weather_param_ru + "\n";
+      meteostation_data += "💨 Ветер: " + String(weather.wind_speed) + " м/с\n";
+      meteostation_data += "💧 Влажность: " + String(weather.humidity) + " %\n";
+      meteostation_data += "🌥 Облачность: " + String(weather.clouds_all) + " %\n"; // droplet :droplet: or U+1F4A7 or \xF0\x9F\x92\xA7
+
+      bot.sendMessage(chat_id, meteostation_data, "Markdown"); // send message
+      lcd.clear();
+      printWeatherLcd(weather); // printing all info to lcd screen
+      delay(10000);
+      //      lcd.clear();
+    } else {
+      bot.sendMessage(chat_id, "Something go wrong...", "");
+      getWeather();
+      return;
+    }
+  }
+}
+
+void start_command(String chat_id, String text, String from_name) {
+  from_name = (from_name == "") ? "Guest" : from_name;
+  if (text == "/start") {
+    String welcome = "Welcome to BoniBot, " + from_name + ".\n";
+    welcome += "This is *Meteostation* example.\n\n";
+    welcome += "On : to switch the Led *ON* 💡\n";
+    welcome += "Off : to switch the Led *OFF* 💡.\n";
+    welcome += "/status : Returns current status of LED.\n";
+    welcome += "/getmeteodata : Returns current status of humidity, temperature and CO2 concentration in the room.\n";
+    welcome += "/getweather : Returns weather in current location.\n";
+    bot.sendMessage(chat_id, welcome, "Markdown");
+  }
 }
 
 // handle new messages in telegram
@@ -102,137 +171,26 @@ void handleNewMessages(int numNewMessages) {
 
   for (int i = 0; i < numNewMessages; i++) {
     String chat_id = String(bot.messages[i].chat_id);
-    String text = bot.messages[i].text; // text that send user to bot
+    String text = bot.messages[i].text;
 
     String from_name = bot.messages[i].from_name; // name of user
-    if (from_name == "") from_name = "Guest";
 
-    if (text == "On") {
-      digitalWrite(rLEDPin, HIGH); // turn the LED ON (HIGH is the voltage level)
-      bot.sendMessage(chat_id, "LED is ON", ""); // sending response to bot
-      ledStatus = 1;
-    }
-
-    if (text == "Off") {
-      ledStatus = 0;
-      digitalWrite(rLEDPin, LOW);    // turn the LED off (LOW is the voltage level)
-      bot.sendMessage(chat_id, "Led is OFF", "");  // sending response to bot
-    }
-
-    if (text == "/status") {
-      if (ledStatus) {
-        bot.sendMessage(chat_id, "Led is ON 💡", ""); // \xF0\x9F\x92\xA1
-      } else {
-        bot.sendMessage(chat_id, "Led is OFF 💡", "");
-      }
-    }
-
-    // send current meteodata from our sensors
-    if (text == "/getmeteodata") {
-      String meteostation_data = "Сейчас в комнате " + String(temperature) + " °С . \n";
-      meteostation_data += "💧 Влажность: " + String(humidity) + " %.\n"; // droplet :droplet: or U+1F4A7 or \xF0\x9F\x92\xA7
-      bot.sendMessage(chat_id, meteostation_data, "Markdown");
-    }
-
-    if (text == "/getweather") { // get weather in our location from weather api
-      getWeather();
-      if (buffer_line_weather != "") {
-        const size_t capacity = JSON_ARRAY_SIZE(3) + 2 * JSON_OBJECT_SIZE(1) + JSON_OBJECT_SIZE(2) + 3 * JSON_OBJECT_SIZE(4) + JSON_OBJECT_SIZE(5) + JSON_OBJECT_SIZE(6) + JSON_OBJECT_SIZE(12) + 1169;
-        DynamicJsonBuffer jsonBuffer(capacity);
-        JsonObject& weather = jsonBuffer.parseObject(buffer_line_weather); // parse response from api
-        if (!weather.success()) {
-          Serial.println(F("Parsing failed!"));
-          return;
-        }
-        String city = weather["name"];
-        Serial.println(city);
-        JsonObject& main = weather["main"];
-        float temp = main.get<float>("temp"); // температура текущая
-        float feels_like = main.get<float>("feels_like"); // ощущается температура как градусы °С
-        int pressure = main.get<int>("pressure"); //  атмосферное давление гПа (паскали)
-        float humidity = main.get<float>("humidity"); // влажность %
-        int wind_speed = weather["wind"]["speed"]; // скорость ветра m/s
-        int clouds_all = weather["clouds"]["all"]; // облачность %
-        JsonObject& weather_0 = weather["weather"][0];
-        String weather_0_main = weather_0.get<String>("main"); // параметры погоды - солнечно, дождливо, пасмурно
-        String weather_0_description = weather_0.get<String>("description");
-        String weather_param;
-
-        if (weather_0_main == "Mist") {
-          weather_param = "Пасмурно";
-        } else if (weather_0_main == "Thunderstorm") {
-          weather_param = "Гроза";
-        } else if (weather_0_main == "Drizzle") {
-          weather_param = "Небольшой дождь";
-        } else if (weather_0_main == "Rain") {
-          weather_param = "Дождь";
-        } else if (weather_0_main == "Snow") {
-          weather_param = "Снег";
-        } else if (weather_0_main == "Fog") {
-          weather_param = "Туман";
-        } else if (weather_0_main == "Clear") {
-          weather_param = "Чистое небо";
-        } else if (weather_0_main == "Clouds") {
-          weather_param = "Облачно";
-        } else {
-          weather_param = weather_0_main;
-        }
-
-        String meteostation_data = "Погода в *" + city + "*.\n";
-        meteostation_data += "🌡 Температура:" + String(temp) + " °С, ощущается как " + String(feels_like) + " °С. ";
-        meteostation_data += weather_param + "\n";
-        meteostation_data += "💨 Ветер: " + String(wind_speed) + " м/с\n";
-        meteostation_data += "💧 Влажность: " + String(humidity) + " %\n";
-        meteostation_data += "🌥 Облачность: " + String(clouds_all) + " %\n"; // droplet :droplet: or U+1F4A7 or \xF0\x9F\x92\xA7
-        bot.sendMessage(chat_id, meteostation_data, "Markdown"); // send message
-        lcd.clear();
-        // printing all info to lcd screen
-        lcdPrint("City:" + city + " " + weather_0_main);
-        lcdPrint("T:" + String(temp) + "\337C F:" + String(feels_like) + "\337C", 0, 1);
-        lcdPrint("Wind:" + String(wind_speed) + "m/s \1" + String(humidity) + "%", 0, 2);
-        lcdPrint("\2\3" + String(clouds_all) + " %", 0, 3);
-
-        delay(10000);
-        lcd.clear();
-      } else {
-        bot.sendMessage(chat_id, "Something go wrong...", "");
-      }
-    }
-
-    if (text == "/start") {
-      String welcome = "Welcome to BoniBot, " + from_name + ".\n";
-      welcome += "This is *Meteostation* example.\n\n";
-      welcome += "On : to switch the Led *ON* 💡\n";
-      welcome += "Off : to switch the Led *OFF* 💡.\n";
-      welcome += "/status : Returns current status of LED.\n";
-      welcome += "/getdata : Returns current status of humidity and temperature in the room.\n";
-      bot.sendMessage(chat_id, welcome, "Markdown");
-    }
+    start_command(chat_id, text, from_name);
+    bot.sendChatAction(chat_id, "typing");
+    switch_led_command(chat_id, text);
+    check_led_status_command(chat_id, text); // sends current led status
+    get_meteodata_command(chat_id, text); // send current meteodata from our sensors
+    get_weather_command(chat_id, text); // send forecast in the city
   }
 }
-
 
 void setup() {
   Serial.begin(115200);
   //  gdbstub_init();
   pinMode(rLEDPin, OUTPUT);
+  pinMode(button, INPUT);
   // Connect to WiFi network
-  Serial.print(F("Connecting to "));
-  Serial.println(ssid);
-
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(ssid, password); // initialize station
-
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(F("."));
-  }
-  Serial.println();
-  Serial.println(F("WiFi connected"));
-  Serial.println(WiFi.localIP());
-  Serial.println("...ok...");
-  mqttClient.setServer(mqtt_server, 1883);
-  mqttClient.setCallback(on_message);
+  wifiBegin(ssid, password);
 
   dht.begin();
   lcd.init();
@@ -247,18 +205,19 @@ void setup() {
   delay(1500);
   lcd.clear();
   net_ssl.setInsecure(); // confirm certs
-  getJson(); // get world time
+  getLocalTime(); // get world time
 }
 
 int continueToScroll = false;
 
 void loop() {
-  Serial.println("Start loop - " + String(millis() / 1000) );
+  butt = !digitalRead(button);
   DynamicJsonBuffer jsonBuffer(2000); // prepare buffer for response
   // Parse JSON object
   JsonObject& doc = jsonBuffer.parseObject(buffer_line_time); // parse response from api
   if (!doc.success()) {
     Serial.println(F("Parsing failed!"));
+    getLocalTime();
     return;
   }
   if (!mqttClient.connected()) {
@@ -267,7 +226,7 @@ void loop() {
   }
   mqttClient.loop();
 
-  if(millis() - updateTimeDHT > 30000) {
+  if (millis() - updateTimeDHT > 30000) {
     updateTimeDHT = millis();
     publishDhtData(temperature, humidity);
   }
@@ -282,56 +241,59 @@ void loop() {
     }
   }
 
-  if (millis() - last_time > 5000) {
-    lcd.setCursor(0, 0);
-    // for v5 ArduinoJson
-    String timezone = doc.get<String>("timezone");
-    // for v6 ArduinoJson
-    //    String timezone = doc["timezone"].as<String>();
-    lcd.print(String("TZ:" + timezone));
-    lcd.setCursor(0, 1);
-    String datetime = doc.get<String>("datetime");
-    // for v6 ArduinoJson
-    //    String timezone = doc["datetime"].as<String>();
-    String date = datetime.substring(0, 10);
-    String tm = datetime.substring(11, 16); // h:m:s - from 11 to 19 symbols h:m - from 11 to 16
-
-    lcd.print(date);
-    lcd.print(" ");
-    lcd.print(tm);
-    last_time = millis();
-    //    getJson();
-  }
-
   if (butt == HIGH && butt_flag == false && millis() - last_press > 200) {
     butt_flag = true;
-
+    current_mode = !current_mode;
+    lcd.clear();
     last_press = millis();
   }
 
   if (butt == LOW && butt_flag == true) {
     butt_flag = false;
   }
+  if (current_mode == 0) {
+    if (millis() - last_time > 5000) {
+      getLocalTime();
+      lcd.setCursor(0, 0);
+      String timezone = doc.get<String>("timezone");
+      lcd.print(String("TZ:" + timezone));
+      lcd.setCursor(0, 1);
+      String datetime = doc.get<String>("datetime");
+      String date = datetime.substring(0, 10);
+      String tm = datetime.substring(11, 16); // h:m:s - from 11 to 19 symbols h:m - from 11 to 16
 
-  float h = dht.readHumidity();
-  float t = dht.readTemperature();
-  humidity = h;
-  temperature = t;
-  if (isnan(h) || isnan(t)) {  // Check. If we can't get values, outputing «Error», and program exits
-    lcd.print("Error!");
-    return;
+      lcd.print(date);
+      lcd.print(" ");
+      lcd.print(tm);
+      last_time = millis();
+    }
+
+    float h = dht.readHumidity();
+    float t = dht.readTemperature();
+    humidity = h;
+    temperature = t;
+    if (isnan(h) || isnan(t)) {  // Check. If we can't get values, outputing «Error», and program exits
+      lcd.print("Error!");
+      return;
+    }
+    lcd.setCursor(0, 2);
+    lcd.print("\1");
+    lcd.print(h);
+    lcd.print("% Temp:");
+    lcd.print(t);
+    lcd.print("\337C"); // symbol of gradus
+  } else {
+    if (buffer_line_weather == "") {
+      getWeather();
+    }
+    auto weather = jsonParser.getWeatherData(buffer_line_weather);
+    printWeatherLcd(weather);
   }
-  lcd.setCursor(0, 2);
-  lcd.print("\1");
-  lcd.print(h);
-  lcd.print("% Temp:");
-  lcd.print(t);
-  lcd.print("\337C"); // symbol of gradus
+
   mqttClient.loop();
-  Serial.println("End loop - " + String(millis() / 1000));
 }
 
-void getJson() {
+void getLocalTime() {
   WiFiClient client; // initiate Wi-Fi client
   client.setTimeout(1000);
   if (!client.connect("worldtimeapi.org", 80)) { // connect to api
@@ -391,9 +353,8 @@ void getWeather() {
   client.stop();
 }
 
-void publishDhtData(float temp, float humid) {
+void publishDhtData(float temperature, float humidity) {
   char msgBuffer[20];
-
-  mqttClient.publish("room/temp", dtostrf(temp, 5, 2, msgBuffer));
-  mqttClient.publish("room/humidity", dtostrf(humid, 5, 2, msgBuffer));
+  mqttClient.publish("room/temp", dtostrf(temperature, 5, 2, msgBuffer));
+  mqttClient.publish("room/humidity", dtostrf(humidity, 5, 2, msgBuffer));
 }
