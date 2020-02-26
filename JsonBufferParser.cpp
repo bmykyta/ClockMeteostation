@@ -39,7 +39,7 @@ JsonBufferParser::TimeData JsonBufferParser::getTimeData(String bufferExternal) 
   }
   DynamicJsonBuffer jsonBuffer(2000); // prepare buffer for response
   // Parse JSON object
-  JsonObject& doc = jsonBuffer.parseObject(buffer_line_time); // parse response from api
+  JsonObject& doc = jsonBuffer.parseObject(bufferExternal); // parse response from api
   if (!doc.success()) {
     Serial.println(F("Parsing failed!"));
     ptime.empty = true;
@@ -48,9 +48,9 @@ JsonBufferParser::TimeData JsonBufferParser::getTimeData(String bufferExternal) 
   ptime.empty = false;
   ptime.timezone = doc.get<String>("timezone");
   ptime.datetime = doc.get<String>("datetime");
-  ptime.date = datetime.substring(0, 10);
-  ptime.hm = datetime.substring(11, 16);
-  ptime.hms = datetime.substring(11, 19);
+  ptime.date = ptime.datetime.substring(0, 10);
+  ptime.hm = ptime.datetime.substring(11, 16);
+  ptime.hms = ptime.datetime.substring(11, 19);
 
   return ptime;
 }

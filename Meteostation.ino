@@ -15,16 +15,24 @@
 #include "functions.h"
 #include "JsonBufferParser.h"
 
+#define DHTPIN D7 // DHT pin
+#define LCDADDR 0x27 // address of lcd screen
+#define BUFFER_SIZE 100 // buffer size
+#define SECS_PER_MIN (60000)
+#define HOURS_IN_MLSECS(hour) (hour * 60 * SECS_PER_MIN)
+
+// initialize config variables
 const char* ssid = STASSID; // SSID for wi-fi station
 const char* password = STAPSK; // password for wi-fi station
-const char* time_api = "worldtimeapi.org"; // world time api for current time
-const char* weather_api = "api.openweathermap.org/data/2.5"; // open weather map for current weather and forecasts
-const String owm_token = "APPID=955b3280174bbe6155b80a34ad117a0d"; // token for communication with open weather map api
-String location = "Kharkiv,UA"; // location for the forecast
-const char* mqtt_server = "192.168.1.6"; // mqtt server addr
-const int mqtt_port = 1883; // mqtt port
-const char* mqtt_user = ""; // if mqtt anonymous with user and pass
-const char* mqtt_pass = "";
+const char* time_api = TIMEAPI; // world time api for current time
+const char* weather_api = WEATHERAPI; // open weather map for current weather and forecasts
+const String owm_token = OWMTOKEN; // token for communication with open weather map api
+String location = LOCATION; // location for the forecast
+const char* mqtt_server = MQTTSERVER; // mqtt server addr
+const int mqtt_port = MQTTPORT; // mqtt port
+const char* mqtt_user = MQTTUSER; // if mqtt anonymous with user and pass
+const char* mqtt_pass = MQTTPASS;
+String bot_token = BOT_TOKEN;
 
 const int rLEDPin = D5;
 const int button = D4;
@@ -36,10 +44,10 @@ unsigned long last_time = 0;
 
 // Secure client for telegram
 WiFiClientSecure net_ssl; // later we confirm ssl certificates
-UniversalTelegramBot bot(BOTtoken, net_ssl);
+UniversalTelegramBot bot(bot_token, net_ssl);
 
-WiFiClient wifiMqttClient;
-PubSubClient mqttClient(mqtt_server, mqtt_port, callbackOnMessage, wifiMqttClient);
+WiFiClient wfc;
+PubSubClient mqttClient(mqtt_server, mqtt_port, callbackOnMessage, wfc);
 
 LiquidCrystal_I2C lcd(LCDADDR, 20, 4);
 DHT dht(DHTPIN, DHT11);
@@ -49,16 +57,17 @@ void getWeather();
 
 String buffer_line_time; // buffer for recieve response from time api
 String buffer_line_weather; // buffer for recieve response from weather api
-long checkTelegramDueTime;
-int checkTelegramDelay = 1000; // check new messages in telegram
-long Bot_lasttime = 0; // bot last time checking new messages
-unsigned long updateTimeDHT;
+unsigned long updateTimeBot = 0; // bot last time checking new messages
+unsigned long updateTimeDHT = 0;
+unsigned long updateTimeWeather = 0;
 int Bot_mtbs = 1000;
-bool Start = false; // if new user starting bot
 int ledStatus = 0; // led status
+int current_mode = 0;
+int checkTelegramDelay = 1000; // check new messages in telegram
 float humidity; // humidity - влажность воздуха получаемая на текущем модуле DHT-11
 float temperature; // temperature - температура получаемая на текущем модуле DHT-11
-int current_mode = 0;
+bool Start = false; // if new user starting bot
+bool continueToScroll = false;
 
 void lcdPrint(String str, int col = 0, int row = 0)
 {
@@ -73,13 +82,12 @@ void reconnect() {
     String clientId = "ESP8266Client-1";
     // Attempt to connect
     if (mqttClient.connect(clientId.c_str())) {
-      Serial.print("connected  state =");
+      Serial.print("connected  state = ");
       Serial.println(mqttClient.state());
       mqttClient.subscribe("room/+");
     } else {
-      Serial.print("failed, rc=");
+      Serial.print("failed, rc = ");
       Serial.print(mqttClient.state());
-      Serial.println(" try again in 5 seconds");
       // Wait 5 seconds before retrying
       delay(5000);
     }
@@ -112,13 +120,17 @@ void check_led_status_command(String chat_id, String text) {
 
 void get_meteodata_command(String chat_id, String text) {
   if (text == "/getmeteodata") {
-    String meteostation_data = "Сейчас в комнате " + String(temperature) + " °С . \n";
+    String meteostation_data = "Сейчас в комнате 🌡 " + String(temperature) + " °С . \n";
     meteostation_data += "💧 Влажность: " + String(humidity) + " %.\n"; // droplet :droplet: or U+1F4A7 or \xF0\x9F\x92\xA7
     bot.sendMessage(chat_id, meteostation_data, "Markdown");
   }
 }
 
-void printWeatherLcd(JsonBufferParser::WeatherData weather) {
+void lcdPrintWeather(JsonBufferParser::WeatherData weather) {
+  if (weather.empty) {
+    lcdPrint("Failed to print");
+    return;
+  }
   lcdPrint("City:" + weather.city + " " + weather.weather_param_en);
   lcdPrint("T:" + String(weather.temp) + "\337C F:" + String(weather.feels_like) + "\337C", 0, 1);
   lcdPrint("Wind:" + String(weather.wind_speed) + "m/s \1" + String(weather.humidity) + "%", 0, 2);
@@ -131,17 +143,13 @@ void get_weather_command(String chat_id, String text) {
     auto weather = jsonParser.getWeatherData(buffer_line_weather);
     if (weather.empty != true) {
       String meteostation_data = "Погода в *" + weather.city + "*.\n";
-      meteostation_data += "🌡 Температура:" + String(weather.temp) + " °С, ощущается как " + String(weather.feels_like) + " °С. ";
+      meteostation_data += "🌡 Температура: " + String(weather.temp) + " °С, ощущается как " + String(weather.feels_like) + " °С. ";
       meteostation_data += weather.weather_param_ru + "\n";
       meteostation_data += "💨 Ветер: " + String(weather.wind_speed) + " м/с\n";
       meteostation_data += "💧 Влажность: " + String(weather.humidity) + " %\n";
       meteostation_data += "🌥 Облачность: " + String(weather.clouds_all) + " %\n"; // droplet :droplet: or U+1F4A7 or \xF0\x9F\x92\xA7
 
       bot.sendMessage(chat_id, meteostation_data, "Markdown"); // send message
-      lcd.clear();
-      printWeatherLcd(weather); // printing all info to lcd screen
-      delay(10000);
-      //      lcd.clear();
     } else {
       bot.sendMessage(chat_id, "Something go wrong...", "");
       getWeather();
@@ -184,6 +192,83 @@ void handleNewMessages(int numNewMessages) {
   }
 }
 
+void mqttReconnection() {
+  if (!mqttClient.connected()) {
+    Serial.println("reconnect!....");
+    reconnect();
+  }
+}
+
+void mqttLoop() {
+  mqttReconnection();
+  mqttClient.loop();
+}
+
+void lcdPrintLocalTime() {
+  if (millis() - last_time > 5000) {
+    getLocalTime();
+    auto locTime = jsonParser.getTimeData(buffer_line_time);
+    lcdPrint(String("TZ:" + locTime.timezone));
+    lcdPrint(locTime.date + " " + locTime.hm, 0, 1);
+    last_time = millis();
+  }
+}
+
+void switchMode() {
+  if (butt == HIGH && butt_flag == false && millis() - last_press > 200) {
+    butt_flag = true;
+    current_mode = !current_mode;
+    lcd.clear();
+    last_press = millis();
+  }
+
+  if (butt == LOW && butt_flag == true) {
+    butt_flag = false;
+  }
+}
+
+void readMeteodata() {
+  humidity = dht.readHumidity();
+  temperature = dht.readTemperature();
+  if (isnan(humidity) || isnan(temperature)) {  // Check. If we can't get values, outputing «Error», and program exits
+    lcdPrint("Error!", 0, 2);
+    return;
+  }
+}
+
+void displayedMode() {
+  if (current_mode == 0) {
+    lcdPrintLocalTime();
+    readMeteodata();
+    lcdPrint("\1" + String(humidity) + "% Temp:" + String(temperature) + "\337C", 0, 2);
+  } else {
+    if (millis() - updateTimeWeather >= HOURS_IN_MLSECS(3)) {
+      updateTimeWeather = millis();
+      getWeather();
+    }
+    auto weather = jsonParser.getWeatherData(buffer_line_weather);
+    lcdPrintWeather(weather);
+  }
+
+  if (millis() - updateTimeDHT > 30000) {
+    updateTimeDHT = millis();
+    publishDhtData(temperature, humidity);
+  }
+}
+
+void botLoop() {
+  if (millis() - updateTimeBot > checkTelegramDelay)  { // checking new messages for delay
+    updateTimeBot = millis();
+    int numNewMessages = bot.getUpdates(bot.last_message_received + 1); // get updates from bot
+
+    while (numNewMessages) {
+      Serial.println("got response");
+      handleNewMessages(numNewMessages);
+      numNewMessages = bot.getUpdates(bot.last_message_received + 1);
+    }
+  }
+}
+
 void setup() {
   Serial.begin(115200);
   //  gdbstub_init();
@@ -205,92 +290,17 @@ void setup() {
   delay(1500);
   lcd.clear();
   net_ssl.setInsecure(); // confirm certs
-  getLocalTime(); // get world time
+  getLocalTime(); // initialize world time
+  getWeather(); // initialize weather
 }
-
-int continueToScroll = false;
 
 void loop() {
   butt = !digitalRead(button);
-  DynamicJsonBuffer jsonBuffer(2000); // prepare buffer for response
-  // Parse JSON object
-  JsonObject& doc = jsonBuffer.parseObject(buffer_line_time); // parse response from api
-  if (!doc.success()) {
-    Serial.println(F("Parsing failed!"));
-    getLocalTime();
-    return;
-  }
-  if (!mqttClient.connected()) {
-    Serial.println("reconnect!....");
-    reconnect();
-  }
-  mqttClient.loop();
-
-  if (millis() - updateTimeDHT > 30000) {
-    updateTimeDHT = millis();
-    publishDhtData(temperature, humidity);
-  }
-  if (millis() - Bot_lasttime > checkTelegramDelay)  { // checking new messages for delay
-    Bot_lasttime = millis();
-    int numNewMessages = bot.getUpdates(bot.last_message_received + 1); // get updates from bot
-
-    while (numNewMessages) {
-      Serial.println("got response");
-      handleNewMessages(numNewMessages);
-      numNewMessages = bot.getUpdates(bot.last_message_received + 1);
-    }
-  }
-
-  if (butt == HIGH && butt_flag == false && millis() - last_press > 200) {
-    butt_flag = true;
-    current_mode = !current_mode;
-    lcd.clear();
-    last_press = millis();
-  }
-
-  if (butt == LOW && butt_flag == true) {
-    butt_flag = false;
-  }
-  if (current_mode == 0) {
-    if (millis() - last_time > 5000) {
-      getLocalTime();
-      lcd.setCursor(0, 0);
-      String timezone = doc.get<String>("timezone");
-      lcd.print(String("TZ:" + timezone));
-      lcd.setCursor(0, 1);
-      String datetime = doc.get<String>("datetime");
-      String date = datetime.substring(0, 10);
-      String tm = datetime.substring(11, 16); // h:m:s - from 11 to 19 symbols h:m - from 11 to 16
-
-      lcd.print(date);
-      lcd.print(" ");
-      lcd.print(tm);
-      last_time = millis();
-    }
-
-    float h = dht.readHumidity();
-    float t = dht.readTemperature();
-    humidity = h;
-    temperature = t;
-    if (isnan(h) || isnan(t)) {  // Check. If we can't get values, outputing «Error», and program exits
-      lcd.print("Error!");
-      return;
-    }
-    lcd.setCursor(0, 2);
-    lcd.print("\1");
-    lcd.print(h);
-    lcd.print("% Temp:");
-    lcd.print(t);
-    lcd.print("\337C"); // symbol of gradus
-  } else {
-    if (buffer_line_weather == "") {
-      getWeather();
-    }
-    auto weather = jsonParser.getWeatherData(buffer_line_weather);
-    printWeatherLcd(weather);
-  }
-
-  mqttClient.loop();
+  mqttLoop();
+  botLoop();
+  switchMode();
+  displayedMode();
+  mqttLoop();
 }
 
 void getLocalTime() {
