@@ -20,10 +20,15 @@ Also you need to create configs.h file:
 #define STAPSK  "wifipassword"
 #endif
 
-#define DHTPIN D7 // DHT pin
-#define LCDADDR 0x27 // address of lcd screen
-#define BUFFER_SIZE 100 // buffer size
-#define BOTtoken  "" // telegram bot token 
+#define BOT_TOKEN  "" // bot token 
+#define TIMEAPI "worldtimeapi.org"
+#define WEATHERAPI "api.openweathermap.org/data/2.5"	
+#define OWMTOKEN "APPID="	
+#define LOCATION ""	
+#define MQTTSERVER ""
+#define MQTTPORT 1883
+#define MQTTUSER ""
+#define MQTTPASS ""
 
 byte raindrop_symb[8] =      // raindrop symbol / humidity
 {
@@ -39,24 +44,24 @@ byte raindrop_symb[8] =      // raindrop symbol / humidity
 
 byte cloud_part1[] = { // first part of cloud for lcd
   B00000,
-  B00000,
-  B00000,
+  B00001,
   B00111,
   B01111,
   B11111,
   B01111,
-  B00111
+  B00111,
+  B00000
 };
 
 byte cloud_part2[] = { // second part of cloud for lcd
-  B00000,
   B00000,
   B10000,
   B11100,
   B11110,
   B11111,
   B11111,
-  B11110
+  B11110,
+  B00000
 };
 ```
 
