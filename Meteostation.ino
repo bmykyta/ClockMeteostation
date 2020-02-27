@@ -7,6 +7,7 @@
 #include <PubSubClient.h>
 #include <UniversalTelegramBot.h>
 #include <DHT.h>
+#include <MQ135.h>
 #include <LiquidCrystal_I2C.h>
 #include <ArduinoJson.h>
 #include <Wire.h>
@@ -17,6 +18,7 @@
 
 #define DHTPIN D7 // DHT pin
 #define LCDADDR 0x27 // address of lcd screen
+#define GASPIN A0 // mq135 sensor pin
 #define BUFFER_SIZE 100 // buffer size
 #define SECS_PER_MIN (60000)
 #define HOURS_IN_MLSECS(hour) (hour * 60 * SECS_PER_MIN)
@@ -51,6 +53,7 @@ PubSubClient mqttClient(mqtt_server, mqtt_port, callbackOnMessage, wfc);
 
 LiquidCrystal_I2C lcd(LCDADDR, 20, 4);
 DHT dht(DHTPIN, DHT11);
+MQ135 gasSensor = MQ135(GASPIN);
 Scroll_Lcd_Text scrollLcdText;
 JsonBufferParser jsonParser;
 void getWeather();
@@ -66,6 +69,7 @@ int current_mode = 0;
 int checkTelegramDelay = 1000; // check new messages in telegram
 float humidity; // humidity - влажность воздуха получаемая на текущем модуле DHT-11
 float temperature; // temperature - температура получаемая на текущем модуле DHT-11
+float ppm; // co2 concentration in ppm
 bool Start = false; // if new user starting bot
 bool continueToScroll = false;
 
@@ -234,6 +238,10 @@ void readMeteodata() {
     lcdPrint("Error!", 0, 2);
     return;
   }
+  ppm = gasSensor.getPPM();
+  if(isnan(ppm)){
+   lcdPrint("PPM:500", 0, 3);
+  }
 }
 
 void displayedMode() {
@@ -241,6 +249,7 @@ void displayedMode() {
     lcdPrintLocalTime();
     readMeteodata();
     lcdPrint("\1" + String(humidity) + "% Temp:" + String(temperature) + "\337C", 0, 2);
+    lcdPrint("CO2:" + String(ppm), 0, 3);
   } else {
     if (millis() - updateTimeWeather >= HOURS_IN_MLSECS(3)) {
       updateTimeWeather = millis();
@@ -252,7 +261,7 @@ void displayedMode() {
 
   if (millis() - updateTimeDHT > 30000) {
     updateTimeDHT = millis();
-    publishDhtData(temperature, humidity);
+    publishDhtData(temperature, humidity, ppm);
   }
 }
 
@@ -292,6 +301,14 @@ void setup() {
   net_ssl.setInsecure(); // confirm certs
   getLocalTime(); // initialize world time
   getWeather(); // initialize weather
+  gasSensorSetup();
+}
+
+void gasSensorSetup() {
+  float rzero = gasSensor.getRZero();
+  delay(3000);
+  Serial.print("MQ135 RZERO Calibration Value : ");
+  Serial.println(rzero);
 }
 
 void loop() {
@@ -363,8 +380,9 @@ void getWeather() {
   client.stop();
 }
 
-void publishDhtData(float temperature, float humidity) {
+void publishDhtData(float temperature, float humidity, float ppm) {
   char msgBuffer[20];
   mqttClient.publish("room/temp", dtostrf(temperature, 5, 2, msgBuffer));
   mqttClient.publish("room/humidity", dtostrf(humidity, 5, 2, msgBuffer));
+  mqttClient.publish("room/co2", dtostrf(ppm, 6, 0, msgBuffer));
 }
