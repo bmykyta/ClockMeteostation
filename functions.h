@@ -19,18 +19,3 @@ void wifiBegin(const char* ssid, const char* password) {
   Serial.println(WiFi.localIP());
   Serial.println("...ok...");
 }
-
-//handle arrived messages from mqtt broker
-void callbackOnMessage(char* topic, byte* payload, unsigned int length) {
-  Serial.print("Message arrived [");
-  Serial.print(topic);
-  Serial.print("] ");
-  for (int i = 0; i < length; i++) {
-    Serial.print((char)payload[i]);
-  }
-  Serial.println();
-  if (String(topic) == "room/led") {
-    int ledState = String((char*)payload).toInt();
-    digitalWrite(REDPIN, ledState);
-  }
-}

@@ -44,6 +44,8 @@ bool butt;
 unsigned long last_press = 0;
 unsigned long last_time = 0;
 
+void callbackOnMessage(char* topic, byte* payload, unsigned int length);
+
 // Secure client for telegram
 WiFiClientSecure net_ssl; // later we confirm ssl certificates
 UniversalTelegramBot bot(bot_token, net_ssl);
@@ -98,38 +100,6 @@ void reconnect() {
   }
 }
 
-void switch_led_command(String chat_id, String text) {
-  if (text == "On") {
-    digitalWrite(rLEDPin, HIGH); // turn the LED ON (HIGH is the voltage level)
-    bot.sendMessage(chat_id, "LED is ON", ""); // sending response to bot
-    ledStatus = 1;
-  }
-
-  if (text == "Off") {
-    ledStatus = 0;
-    digitalWrite(rLEDPin, LOW);    // turn the LED off (LOW is the voltage level)
-    bot.sendMessage(chat_id, "Led is OFF", "");  // sending response to bot
-  }
-}
-
-void check_led_status_command(String chat_id, String text) {
-  if (text == "/status") {
-    if (ledStatus) {
-      bot.sendMessage(chat_id, "Led is ON 💡", ""); // \xF0\x9F\x92\xA1
-    } else {
-      bot.sendMessage(chat_id, "Led is OFF 💡", "");
-    }
-  }
-}
-
-void get_meteodata_command(String chat_id, String text) {
-  if (text == "/getmeteodata") {
-    String meteostation_data = "Сейчас в комнате 🌡 " + String(temperature) + " °С . \n";
-    meteostation_data += "💧 Влажность: " + String(humidity) + " %.\n"; // droplet :droplet: or U+1F4A7 or \xF0\x9F\x92\xA7
-    bot.sendMessage(chat_id, meteostation_data, "Markdown");
-  }
-}
-
 void lcdPrintWeather(JsonBufferParser::WeatherData weather) {
   if (weather.empty) {
     lcdPrint("Failed to print");
@@ -159,40 +129,6 @@ void get_weather_command(String chat_id, String text) {
       getWeather();
       return;
     }
-  }
-}
-
-void start_command(String chat_id, String text, String from_name) {
-  from_name = (from_name == "") ? "Guest" : from_name;
-  if (text == "/start") {
-    String welcome = "Welcome to BoniBot, " + from_name + ".\n";
-    welcome += "This is *Meteostation* example.\n\n";
-    welcome += "On : to switch the Led *ON* 💡\n";
-    welcome += "Off : to switch the Led *OFF* 💡.\n";
-    welcome += "/status : Returns current status of LED.\n";
-    welcome += "/getmeteodata : Returns current status of humidity, temperature and CO2 concentration in the room.\n";
-    welcome += "/getweather : Returns weather in current location.\n";
-    bot.sendMessage(chat_id, welcome, "Markdown");
-  }
-}
-
-// handle new messages in telegram
-void handleNewMessages(int numNewMessages) {
-  Serial.println("handleNewMessages");
-  Serial.println(String(numNewMessages));
-
-  for (int i = 0; i < numNewMessages; i++) {
-    String chat_id = String(bot.messages[i].chat_id);
-    String text = bot.messages[i].text;
-
-    String from_name = bot.messages[i].from_name; // name of user
-
-    start_command(chat_id, text, from_name);
-    bot.sendChatAction(chat_id, "typing");
-    switch_led_command(chat_id, text);
-    check_led_status_command(chat_id, text); // sends current led status
-    get_meteodata_command(chat_id, text); // send current meteodata from our sensors
-    get_weather_command(chat_id, text); // send forecast in the city
   }
 }
 
@@ -265,19 +201,6 @@ void displayedMode() {
   }
 }
 
-void botLoop() {
-  if (millis() - updateTimeBot > checkTelegramDelay)  { // checking new messages for delay
-    updateTimeBot = millis();
-    int numNewMessages = bot.getUpdates(bot.last_message_received + 1); // get updates from bot
-
-    while (numNewMessages) {
-      Serial.println("got response");
-      handleNewMessages(numNewMessages);
-      numNewMessages = bot.getUpdates(bot.last_message_received + 1);
-    }
-  }
-}
-
 void setup() {
   Serial.begin(115200);
   //  gdbstub_init();
@@ -314,7 +237,6 @@ void gasSensorSetup() {
 void loop() {
   butt = !digitalRead(button);
   mqttLoop();
-  botLoop();
   switchMode();
   displayedMode();
   mqttLoop();
@@ -380,9 +302,48 @@ void getWeather() {
   client.stop();
 }
 
+
+//handle arrived messages from mqtt broker
+void callbackOnMessage(char* topic, byte* payload, unsigned int length) {
+  Serial.print("Message arrived [");
+  Serial.print(topic);
+  Serial.print("] ");
+  for (int i = 0; i < length; i++) {
+    Serial.print((char)payload[i]);
+  }
+  Serial.println();
+  if (String(topic) == "room/led") {
+    int ledState = String((char*)payload).toInt();
+    ledStatus = ledState;
+    digitalWrite(REDPIN, ledState);
+  }
+  if (String(topic) == "room/led-status") {
+    char _ledStat[2];
+    itoa(ledStatus, _ledStat, 10);
+    mqttClient.publish("room/led-status/telegram", _ledStat);
+  }
+  if (String(topic) == "room/getmeteodata") {
+    readMeteodata();
+    publishMeteodataTelegram();
+  }
+}
+
+void publishMeteodataTelegram() {
+  String rez = "{\n";
+  rez += "\"temperature\":"+String(temperature)+",";
+  rez += "\"humidity\":"+String(humidity)+",";
+  rez += "\"ppm\":"+String(ppm);
+  rez += "}";
+  int rezLen = 2*rez.length();
+  char msgBuffer[rezLen];
+  rez.toCharArray(msgBuffer, rezLen);
+  Serial.println(msgBuffer);
+  mqttClient.publish("room/meteodata/telegram", msgBuffer);
+}
+
 void publishDhtData(float temperature, float humidity, float ppm) {
   char msgBuffer[20];
   mqttClient.publish("room/temp", dtostrf(temperature, 5, 2, msgBuffer));
   mqttClient.publish("room/humidity", dtostrf(humidity, 5, 2, msgBuffer));
-  mqttClient.publish("room/co2", dtostrf(ppm, 6, 0, msgBuffer));
+  mqttClient.publish("room/co2", dtostrf(ppm, 7, 0, msgBuffer));
 }
