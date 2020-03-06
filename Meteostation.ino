@@ -5,7 +5,6 @@
 #include <ESP8266WiFi.h>
 #include <WiFiClientSecure.h>
 #include <PubSubClient.h>
-#include <UniversalTelegramBot.h>
 #include <DHT.h>
 #include <MQ135.h>
 #include <LiquidCrystal_I2C.h>
@@ -34,7 +33,6 @@ const char* mqtt_server = MQTTSERVER; // mqtt server addr
 const int mqtt_port = MQTTPORT; // mqtt port
 const char* mqtt_user = MQTTUSER; // if mqtt anonymous with user and pass
 const char* mqtt_pass = MQTTPASS;
-String bot_token = BOT_TOKEN;
 
 const int rLEDPin = D5;
 const int button = D4;
@@ -48,7 +46,6 @@ void callbackOnMessage(char* topic, byte* payload, unsigned int length);
 
 // Secure client for telegram
 WiFiClientSecure net_ssl; // later we confirm ssl certificates
-UniversalTelegramBot bot(bot_token, net_ssl);
 
 WiFiClient wfc;
 PubSubClient mqttClient(mqtt_server, mqtt_port, callbackOnMessage, wfc);
@@ -62,17 +59,13 @@ void getWeather();
 
 String buffer_line_time; // buffer for recieve response from time api
 String buffer_line_weather; // buffer for recieve response from weather api
-unsigned long updateTimeBot = 0; // bot last time checking new messages
 unsigned long updateTimeDHT = 0;
 unsigned long updateTimeWeather = 0;
-int Bot_mtbs = 1000;
 int ledStatus = 0; // led status
 int current_mode = 0;
-int checkTelegramDelay = 1000; // check new messages in telegram
 float humidity; // humidity - влажность воздуха получаемая на текущем модуле DHT-11
 float temperature; // temperature - температура получаемая на текущем модуле DHT-11
 float ppm; // co2 concentration in ppm
-bool Start = false; // if new user starting bot
 bool continueToScroll = false;
 
 void lcdPrint(String str, int col = 0, int row = 0)
@@ -109,27 +102,6 @@ void lcdPrintWeather(JsonBufferParser::WeatherData weather) {
   lcdPrint("T:" + String(weather.temp) + "\337C F:" + String(weather.feels_like) + "\337C", 0, 1);
   lcdPrint("Wind:" + String(weather.wind_speed) + "m/s \1" + String(weather.humidity) + "%", 0, 2);
   lcdPrint("\2\3" + String(weather.clouds_all) + " %", 0, 3);
-}
-
-void get_weather_command(String chat_id, String text) {
-  if (text == "/getweather") { // get weather in our location from weather api
-    getWeather();
-    auto weather = jsonParser.getWeatherData(buffer_line_weather);
-    if (weather.empty != true) {
-      String meteostation_data = "Погода в *" + weather.city + "*.\n";
-      meteostation_data += "🌡 Температура: " + String(weather.temp) + " °С, ощущается как " + String(weather.feels_like) + " °С. ";
-      meteostation_data += weather.weather_param_ru + "\n";
-      meteostation_data += "💨 Ветер: " + String(weather.wind_speed) + " м/с\n";
-      meteostation_data += "💧 Влажность: " + String(weather.humidity) + " %\n";
-      meteostation_data += "🌥 Облачность: " + String(weather.clouds_all) + " %\n"; // droplet :droplet: or U+1F4A7 or \xF0\x9F\x92\xA7
-
-      bot.sendMessage(chat_id, meteostation_data, "Markdown"); // send message
-    } else {
-      bot.sendMessage(chat_id, "Something go wrong...", "");
-      getWeather();
-      return;
-    }
-  }
 }
 
 void mqttReconnection() {
