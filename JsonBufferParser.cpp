@@ -32,7 +32,8 @@ JsonBufferParser::TimeData JsonBufferParser::getTimeData(String bufferExternal) 
     ptime.empty = true;
     return ptime;
   }
-  DynamicJsonBuffer jsonBuffer(2000); // prepare buffer for response
+  const size_t capacity = JSON_OBJECT_SIZE(15) + 290;
+  DynamicJsonBuffer jsonBuffer(capacity); // prepare buffer for response
   // Parse JSON object
   JsonObject& doc = jsonBuffer.parseObject(bufferExternal); // parse response from api
   if (!doc.success()) {
@@ -42,10 +43,9 @@ JsonBufferParser::TimeData JsonBufferParser::getTimeData(String bufferExternal) 
   }
   ptime.empty = false;
   ptime.timezone = doc.get<String>("timezone");
-  ptime.datetime = doc.get<String>("datetime");
-  ptime.date = ptime.datetime.substring(0, 10);
-  ptime.hm = ptime.datetime.substring(11, 16);
-  ptime.hms = ptime.datetime.substring(11, 19);
+  ptime.date = doc.get<String>("date");
+  ptime.hms = doc.get<String>("hms");
+  ptime.hm = doc.get<String>("hm");
 
   return ptime;
 }

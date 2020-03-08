@@ -23,13 +23,11 @@
 #define SECS_PER_MIN (60000)
 #define HOURS_IN_MLSECS(hour) (hour * 60 * SECS_PER_MIN)
 
+const bool _debug = false;
 // initialize config variables
 const char* ssid = STASSID; // SSID for wi-fi station
 const char* password = STAPSK; // password for wi-fi station
 const char* time_api = TIMEAPI; // world time api for current time
-const char* weather_api = WEATHERAPI; // open weather map for current weather and forecasts
-const String owm_token = OWMTOKEN; // token for communication with open weather map api
-String location = LOCATION; // location for the forecast
 const char* mqtt_server = MQTTSERVER; // mqtt server addr
 const int mqtt_port = MQTTPORT; // mqtt port
 const char* mqtt_user = MQTTUSER; // if mqtt anonymous with user and pass
@@ -69,6 +67,7 @@ float temperature; // temperature - температура получаемая 
 float ppm; // co2 concentration in ppm
 bool continueToScroll = false;
 JsonBufferParser::WeatherData weather;
+JsonBufferParser::TimeData locTime;
 
 void lcdPrint(String str, int col = 0, int row = 0)
 {
@@ -121,11 +120,10 @@ void mqttLoop() {
 
 void lcdPrintLocalTime() {
   if (millis() - last_time > 5000) {
-    getLocalTime();
-    auto locTime = jsonParser.getTimeData(buffer_line_time);
+    last_time = millis();
     lcdPrint(String("TZ:" + locTime.timezone));
     lcdPrint(locTime.date + " " + locTime.hm, 0, 1);
-    last_time = millis();
+    getTime();
   }
 }
 
@@ -197,7 +195,7 @@ void setup() {
   lcd.clear();
   net_ssl.setInsecure(); // confirm certs
   mqttReconnection();
-  getLocalTime(); // initialize world time
+  getTime();
   getWeather(); // initialize weather
   gasSensorSetup();
 }
@@ -217,38 +215,13 @@ void loop() {
   mqttLoop();
 }
 
-void getLocalTime() {
-  WiFiClient client; // initiate Wi-Fi client
-  client.setTimeout(1000);
-  if (!client.connect("worldtimeapi.org", 80)) { // connect to api
-    Serial.println(F("Connection failed"));
-    return;
-  }
-
-  Serial.println(F("Connected to api!"));
-
-  // Send HTTP(GET) request to api
-  client.println(F("GET /api/ip HTTP/1.0"));
-  client.println(F("Host: worldtimeapi.org"));
-  client.println(F("Connection: close"));
-  if (client.println() == 0) {
-    Serial.println(F("Failed to send request"));
-    return;
-  }
-
-  delay(1500);
-  while (client.available())
-  {
-    buffer_line_time = client.readStringUntil('\r'); // put response to buffer line for later parse
-  }
-  Serial.println("Closing connection");
-  client.stop();
-}
-
 void getWeather() {
   mqttClient.publish("room/get-weather/telegram", "1");
 }
 
+void getTime() {
+  mqttClient.publish("room/get-time/telegram", "1");
+}
 
 //handle arrived messages from mqtt broker
 void callbackOnMessage(char* topic, byte* payload, unsigned int length) {
@@ -259,23 +232,24 @@ void callbackOnMessage(char* topic, byte* payload, unsigned int length) {
     Serial.print((char)payload[i]);
   }
   Serial.println();
-  if (String(topic) == "room/led") {
+  String _topic = String(topic);
+  if (_topic == "room/led") {
     int ledState = String((char*)payload).toInt();
     ledStatus = ledState;
     digitalWrite(REDPIN, ledState);
-  }
-  if (String(topic) == "room/led-status") {
+  } else if (_topic == "room/led-status") {
     char _ledStat[2];
     itoa(ledStatus, _ledStat, 10);
     mqttClient.publish("room/led-status/telegram", _ledStat);
-  }
-  if (String(topic) == "room/getmeteodata") {
+  } else if (_topic == "room/getmeteodata") {
     readMeteodata();
     publishMeteodataTelegram();
-  }
-  if(String(topic) == "room/getweather") {
+  } else if(_topic == "room/getweather") {
     buffer_line_weather = String((char*)payload);
     weather = jsonParser.getWeatherData(buffer_line_weather);
+  } else if(_topic == "room/gettime") {
+    buffer_line_time = String((char*)payload);
+    locTime = jsonParser.getTimeData(buffer_line_time);
   }
 }
 
