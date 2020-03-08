@@ -19,6 +19,7 @@
 #define LCDADDR 0x27 // address of lcd screen
 #define GASPIN A0 // mq135 sensor pin
 #define BUFFER_SIZE 100 // buffer size
+#define MQTT_MAX_PACKET_SIZE 256
 #define SECS_PER_MIN (60000)
 #define HOURS_IN_MLSECS(hour) (hour * 60 * SECS_PER_MIN)
 
@@ -67,6 +68,7 @@ float humidity; // humidity - влажность воздуха получаем
 float temperature; // temperature - температура получаемая на текущем модуле DHT-11
 float ppm; // co2 concentration in ppm
 bool continueToScroll = false;
+JsonBufferParser::WeatherData weather;
 
 void lcdPrint(String str, int col = 0, int row = 0)
 {
@@ -96,9 +98,10 @@ void reconnect() {
 void lcdPrintWeather(JsonBufferParser::WeatherData weather) {
   if (weather.empty) {
     lcdPrint("Failed to print");
+//    getWeather();
     return;
   }
-  lcdPrint("City:" + weather.city + " " + weather.weather_param_en);
+  lcdPrint("City:" + weather.city + " " + weather.weather_param);
   lcdPrint("T:" + String(weather.temp) + "\337C F:" + String(weather.feels_like) + "\337C", 0, 1);
   lcdPrint("Wind:" + String(weather.wind_speed) + "m/s \1" + String(weather.humidity) + "%", 0, 2);
   lcdPrint("\2\3" + String(weather.clouds_all) + " %", 0, 3);
@@ -163,7 +166,6 @@ void displayedMode() {
       updateTimeWeather = millis();
       getWeather();
     }
-    auto weather = jsonParser.getWeatherData(buffer_line_weather);
     lcdPrintWeather(weather);
   }
 
@@ -194,6 +196,7 @@ void setup() {
   delay(1500);
   lcd.clear();
   net_ssl.setInsecure(); // confirm certs
+  mqttReconnection();
   getLocalTime(); // initialize world time
   getWeather(); // initialize weather
   gasSensorSetup();
@@ -243,35 +246,7 @@ void getLocalTime() {
 }
 
 void getWeather() {
-  WiFiClient client;
-  client.setTimeout(1000);
-  if (!client.connect("api.openweathermap.org", 80)) { // connect to api
-    Serial.println(F("Connection failed"));
-    return;
-  }
-
-  Serial.println(F("Connected to weather api!"));
-
-  // Send HTTP request to api
-  String get_url = "GET ";
-  get_url += "/data/2.5/weather?q=" + location;
-  get_url += "&units=metric&" + owm_token;
-  get_url += " HTTP/1.0";
-  client.println(get_url); // make GET request
-  client.println( F("Host: api.openweathermap.org"));
-  client.println(F("Connection: close"));
-  if (client.println() == 0) {
-    Serial.println(F("Failed to send request"));
-    return;
-  }
-
-  delay(1500);
-  while (client.available())
-  {
-    buffer_line_weather = client.readStringUntil('\r'); // put response to buffer line for later parse
-  }
-  Serial.println("Closing connection");
-  client.stop();
+  mqttClient.publish("room/get-weather/telegram", "1");
 }
 
 
@@ -298,10 +273,14 @@ void callbackOnMessage(char* topic, byte* payload, unsigned int length) {
     readMeteodata();
     publishMeteodataTelegram();
   }
+  if(String(topic) == "room/getweather") {
+    buffer_line_weather = String((char*)payload);
+    weather = jsonParser.getWeatherData(buffer_line_weather);
+  }
 }
 
 void publishMeteodataTelegram() {
-  String rez = "{\n";
+  String rez = "{";
   rez += "\"temperature\":"+String(temperature)+",";
   rez += "\"humidity\":"+String(humidity)+",";
   rez += "\"ppm\":"+String(ppm);

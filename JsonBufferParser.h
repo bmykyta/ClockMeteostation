@@ -5,7 +5,7 @@
 class JsonBufferParser {
   public:
     struct WeatherData {
-      String city, weather_param_en, weather_param_ru, weather_description;
+      String city, weather_param, weather_description;
       float temp, feels_like, humidity;
       int pressure, wind_speed, clouds_all;
       bool empty;
